@@ -39,7 +39,7 @@ def intersect_sphere(ray_origin, ray_direction, sphere):
 
     # t_ca = L . V
     t_ca = np.dot(L, ray_direction)
-    if t_ca < 0:
+    if t_ca < 1e-6:
         return None # sphere is behind the ray
 
     # d^2 = L . L - t_ca^2
@@ -54,11 +54,11 @@ def intersect_sphere(ray_origin, ray_direction, sphere):
     t2 = t_ca + t_hc
 
     t = None
-    if t1 > 0 and t2 > 0:
+    if t1 > 1e-6 and t2 > 1e-6:
         t = min(t1, t2) # returns closest intersection
-    elif t1 > 0:
+    elif t1 > 1e-6:
         t = t1 # returns the intersection in front of the ray
-    elif t2 > 0:
+    elif t2 > 1e-6:
         t = t2 # returns the intersection in front of the ray
     else:
         return None
@@ -74,21 +74,26 @@ def intersect_sphere(ray_origin, ray_direction, sphere):
 #-----------------------------------------------------------
 
 def intersect_plane(ray_origin, ray_direction, plane):
+
+    # Normalizing the plane normal to ensure accurate calculations
     N = np.array(plane.normal, dtype=float)
     N = N / np.linalg.norm(N)   
     c = plane.offset
 
-    denom = np.dot(ray_direction, N)
-    if abs(denom) < 1e-6:
-        return None  
+    V_dot_N = np.dot(ray_direction, N)
+    if abs(V_dot_N) < 1e-6: # "equal to zero" - ray is parallel to the plane
+        return None  # no intersection
 
-    t = (c - np.dot(ray_origin, N)) / denom
+    # place the ray origin in the plane equation
+    # find t in the ray equation = t = (c - P0 . N) / (V . N)
+    t = (c - np.dot(ray_origin, N)) / V_dot_N
     if t < 1e-6:
-        return None
+        return None # plane is behind the ray
 
     hit_point = ray_origin + t * ray_direction
 
-   
+    # ensure the normal is against the ray direction
+    #the normal and the ray create an obtuse angle
     if np.dot(ray_direction, N) > 0:
         N = -N
 
