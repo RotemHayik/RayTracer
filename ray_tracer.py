@@ -71,7 +71,7 @@ def intersect_sphere(ray_origin, ray_direction, sphere):
 
     return t, intersection, normal
 
-#-----------------------------------------------------------
+#------------------------------------------------------------
 
 def intersect_plane(ray_origin, ray_direction, plane):
 
