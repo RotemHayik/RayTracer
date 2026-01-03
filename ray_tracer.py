@@ -102,44 +102,53 @@ def intersect_plane(ray_origin, ray_direction, plane):
 #-----------------------------------------------------------
 
 def intersect_cube(ray_origin, ray_direction, cube):
-    half = cube.scale / 2.0
 
-    # גבולות הקובייה
+    # calculate the bounds of the cube
+    half = cube.scale / 2.0
+    # left lower back corner 
     min_bound = cube.position - half
+    # right upper front corner
     max_bound = cube.position + half
 
+    # ray-box intersection points
+    # t_near is the largest entering t value from all axis
+    # t_far is the smallest exiting t value from all axis
     t_near = -np.inf
     t_far = np.inf
     hit_normal = None
 
     for i in range(3):  # x, y, z
-        if abs(ray_direction[i]) < 1e-6:
-            # הקרן מקבילה למישורי הציר
+        if abs(ray_direction[i]) < 1e-6: # Ray is not moving in this axis
+            # Check if the ray origin is inside the cube bounds on this axis
             if ray_origin[i] < min_bound[i] or ray_origin[i] > max_bound[i]:
                 return None
         else:
-            t1 = (min_bound[i] - ray_origin[i]) / ray_direction[i]
-            t2 = (max_bound[i] - ray_origin[i]) / ray_direction[i]
+            # find t for when the ray crosses the two planes on this axis
+            # solution for: ray_origin[i] + t * ray_direction[i] = min_bound[i]
+            t1_i = (min_bound[i] - ray_origin[i]) / ray_direction[i]
+            t2_i = (max_bound[i] - ray_origin[i]) / ray_direction[i]
 
-            t1_axis = min(t1, t2)
-            t2_axis = max(t1, t2)
+            # swap t1 and t2 if necessary
+            t_entering_i = min(t1_i, t2_i)
+            t_exiting_i = max(t1_i, t2_i)
 
-            if t1_axis > t_near:
-                t_near = t1_axis
+            if t_entering_i > t_near:
+                t_near = t_entering_i
+                # update hit normal, box is axis-aligned so normal is determined by entering axis to the box and the entering side
                 hit_normal = np.zeros(3)
-                hit_normal[i] = -1 if t1 > t2 else 1
+                hit_normal[i] = -1 if t1_i > t2_i else 1
+            t_far = min(t_far, t_exiting_i)
 
-            t_far = min(t_far, t2_axis)
-
-            # תנאי פספוס לפי השקופית
+            # if at this point the largest entering t is larger than the smallest exiting t, no intersection, the ray misses the box
             if t_near > t_far:
                 return None
 
-    # תנאי: הקובייה מאחורי הקרן
+    # box is behind the ray
     if t_far < 1e-6:
         return None
 
-    # נקודת פגיעה היא ב־t_near
+    # box survived tests, intersection occurs at t_near
+    # ray can be inside the box, so we take the nearest positive t
     t_hit = t_near if t_near > 1e-6 else t_far
     hit_point = ray_origin + t_hit * ray_direction
 
