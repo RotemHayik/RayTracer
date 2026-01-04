@@ -1,4 +1,5 @@
 import argparse
+from turtle import color
 from PIL import Image
 import numpy as np
 
@@ -221,6 +222,8 @@ def bool_check_shadow(point, light, obj_lst):
     # return True if the intersection is closer than the light - meaning the light is blocked = there is a shadow
     return t < light_length
 
+#-----------------------------------------------------------
+
 def build_light_plane(light_direction):
     # remember: light direction is from point to light
     # we can’t uniquely define a perpendicular vector to a given normal    # so choose arbitrary vector w that is not parallel to light_direction
@@ -243,6 +246,10 @@ def build_light_plane(light_direction):
     v = v / np.linalg.norm(v)
 
     return u, v
+
+
+#-----------------------------------------------------------
+
 
 def soft_shadow(point_on_obj, light_src, obj_lst, shadow_rays_num):
     # shadow_rays is given by scene settings
@@ -292,6 +299,69 @@ def soft_shadow(point_on_obj, light_src, obj_lst, shadow_rays_num):
 
 
 ###########################   LIGHTING   ###############################
+
+def compute_diffuse(material, light, normal, light_dir):
+    # Idiff​=Kd​⋅Ip​⋅cos(θ)=Kd​⋅Ip​⋅(N⋅L)
+    # Kd = material.diffuse_color
+    # Ip = light.color
+    # N = normal
+    # L = light_dir (normalized)
+    # cos(θ) = N . L
+
+    # diffuse cant be negative
+    N_dot_L = max(0.0, np.dot(normal, light_dir))
+
+    return material.diffuse_color * light.color * N_dot_L
+
+
+#-----------------------------------------------------------
+
+
+def compute_specular(material, light, normal, light_dir, view_dir):
+    # Ispec​=Ks​⋅Ip​⋅cosn(ϕ)=Ks​⋅Ip​⋅(R⋅V)n
+    # Ks = material.specular_color
+    # Ip = light.color
+    # R = reflection direction of light_dir around normal
+    # V = view_dir (normalized)
+    # n = material.shininess
+    # cos(ϕ) = R . V
+
+    # R=2(N⋅L)N−L
+    R = 2 * np.dot(normal, light_dir) * normal - light_dir
+    R_norm = R / np.linalg.norm(R)
+
+    # specular cant be negative
+    R_dot_V = max(0.0, np.dot(R_norm, view_dir))
+
+    return material.specular_color * light.color * (R_dot_V ** material.shininess)
+
+#-----------------------------------------------------------
+
+def compute_lighting(point_on_obj, normal, view_dir, material, lights,obj_lst, scene_settings):
+
+    # RGB color initialized to black
+    color = np.zeros(3)
+
+    for light in lights:
+        # build light ray
+        light_vec = light.position - point_on_obj
+        light_length = np.linalg.norm(light_vec)
+        light_dir_norm = light_vec / light_length
+
+        diffuse = compute_diffuse(material, light, normal, light_dir_norm)
+        specular = compute_specular(material, light, normal, light_dir_norm, view_dir)
+        soft_shadow_factor = soft_shadow(point_on_obj,light,obj_lst,scene_settings.shadow_rays)
+
+        color += soft_shadow_factor * (diffuse + specular)
+
+    # color values range correction to [0, 1]
+    for i in range(3):
+        if color[i] < 0:
+            color[i] = 0
+        elif color[i] > 1:
+            color[i] = 1
+
+    return color
 
 
 #########################################################
