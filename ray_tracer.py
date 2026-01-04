@@ -373,6 +373,156 @@ def reflect(direction, normal):
 
 ###########################   RAY TRACER   ###############################
 
+def ray_tracer(camera, scene_settings, objects, image_width, image_height):
+    # split scene objects
+    obj_lst, lights, materials = organize_scene(objects)
+
+    # render image
+    image = render_scene(camera,scene_settings,obj_lst,lights,materials,image_width,image_height
+    )
+
+    return image
+
+#-----------------------------------------------------------
+
+def rec_ray_tracer(ray_origin, ray_direction, depth,scene_settings, obj_lst, lights, materials):
+
+    # stopping condition
+    if depth <= 0:
+        return np.zeros(3) # black
+
+    hit = closest_intersection(ray_origin, ray_direction, obj_lst)
+
+    # ray missed all objects, therefore return background color
+    if hit is None:
+        return scene_settings.background_color
+
+    t, hit_point, normal, surface = hit
+    material = materials[surface.material_index]
+
+    # specular depends on the view direction
+    # calc view direction (towards camera)
+    # ray direction is from camera to point, so view direction is the opposite
+    view_dir = -ray_direction
+    view_dir_norm = view_dir / np.linalg.norm(view_dir)
+
+    # calc lighting = diffuse + specular + soft shadow
+    color = compute_lighting(hit_point,normal,view_dir_norm, material,lights,obj_lst,scene_settings)
+
+    # calc reflection
+    if material.reflection > 0:
+        reflect_dir = reflect(ray_direction, normal)
+        reflect_dir_norm = reflect_dir / np.linalg.norm(reflect_dir)
+        reflect_origin = hit_point + 1e-4 * reflect_dir_norm
+
+        reflected_color = rec_ray_tracer(
+            reflect_origin,
+            reflect_dir_norm,
+            depth - 1,
+            scene_settings,
+            obj_lst,
+            lights,
+            materials
+        )
+
+        color += material.reflection * reflected_color
+
+    # calc transparency
+    if material.transparency > 0:
+        trans_origin = hit_point + 1e-4 * ray_direction
+
+        transparent_color = rec_ray_tracer(
+            trans_origin,
+            ray_direction,
+            depth - 1,
+            scene_settings,
+            obj_lst,
+            lights,
+            materials
+        )
+
+        color = (
+            (1 - material.transparency) * color +
+            material.transparency * transparent_color
+        )
+
+    # color values range correction to [0, 1]
+    for i in range(3):
+        if color[i] < 0:
+            color[i] = 0
+        elif color[i] > 1:
+            color[i] = 1
+
+    return color
+
+
+###########################   RENDER SCENE   ###############################
+## TODO CHECK THIS FUNCTION  ##
+def render_scene(camera, scene_settings,
+                 obj_lst, lights, materials,
+                 image_width, image_height):
+
+    # image buffer
+    image = np.zeros((image_height, image_width, 3))
+
+    # camera parameters
+    cam_pos = np.array(camera.position)
+    look_at = np.array(camera.look_at)
+    up_vec = np.array(camera.up)
+
+    # camera basis vectors
+    forward = look_at - cam_pos
+    forward = forward / np.linalg.norm(forward)
+
+    right = np.cross(forward, up_vec)
+    right = right / np.linalg.norm(right)
+
+    up = np.cross(right, forward)
+    up = up / np.linalg.norm(up)
+
+    # screen geometry
+    screen_dist = camera.screen_distance
+    screen_width = camera.screen_width
+    aspect_ratio = image_width / image_height
+    screen_height = screen_width / aspect_ratio
+
+    screen_center = cam_pos + forward * screen_dist
+
+    # iterate over pixels
+    for y in range(image_height):
+        for x in range(image_width):
+
+            # normalized pixel coordinates in range [-0.5, 0.5]
+            px = (x + 0.5) / image_width - 0.5
+            py = 0.5 - (y + 0.5) / image_height
+
+            # pixel position on the screen
+            pixel_pos = (
+                screen_center +
+                px * screen_width * right +
+                py * screen_height * up
+            )
+
+            # build ray
+            ray_dir = pixel_pos - cam_pos
+            ray_dir = ray_dir / np.linalg.norm(ray_dir)
+
+            # trace ray
+            color = rec_ray_tracer(
+                cam_pos,
+                ray_dir,
+                scene_settings.max_recursion,
+                scene_settings,
+                obj_lst,
+                lights,
+                materials
+            )
+
+            # store color (convert to [0,255])
+            image[y, x] = color * 255
+
+    return image
+
 
 #########################################################
 
