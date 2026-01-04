@@ -6,6 +6,7 @@ from camera import Camera
 from light import Light
 from material import Material
 from scene_settings import SceneSettings
+import surfaces
 from surfaces.cube import Cube
 from surfaces.infinite_plane import InfinitePlane
 from surfaces.sphere import Sphere
@@ -24,9 +25,27 @@ from surfaces.sphere import Sphere
 
 ## def length(v) = np.linalg.norm(v)
 
-##########################################################
+#######################   helper functions   ###########################
 
-## helper functions ##
+
+def organize_scene(objects):
+    obj_lst = []
+    lights = []
+    materials = []
+
+    for obj in objects:
+        if isinstance(obj, (Sphere, InfinitePlane, Cube)):
+            obj_lst.append(obj)
+        elif isinstance(obj, Light):
+            lights.append(obj)
+        elif isinstance(obj, Material):
+            materials.append(obj)
+
+    return obj_lst, lights, materials
+
+
+
+###########################   GEOMETRY   ###############################
 
 def intersect_sphere(ray_origin, ray_direction, sphere):
     ## ray origin = P0
@@ -156,9 +175,124 @@ def intersect_cube(ray_origin, ray_direction, cube):
 
 #-----------------------------------------------------------
 
-def closest_intersection(ray, surfaces):
-    # Find the closest intersection of the ray with the surfaces
-    pass
+def closest_intersection(ray_origin, ray_direction, obj_lst):
+    closest_t = np.inf
+    closest_hit_details = None
+
+    for obj in obj_lst:
+        result = None
+
+        if isinstance(obj, Sphere):
+            result = intersect_sphere(ray_origin, ray_direction, obj)
+        
+        elif isinstance(obj, InfinitePlane):
+            result = intersect_plane(ray_origin, ray_direction, obj)
+
+        elif isinstance(obj, Cube):
+            result = intersect_cube(ray_origin, ray_direction, obj)
+
+        # if there was an intersection - check if closest
+        if result is not None:
+            # unpack result
+            t, hit_point, hit_normal = result
+            if t < closest_t:
+                closest_t = t
+                closest_hit_details = (t, hit_point, hit_normal, obj)
+
+    return closest_hit_details
+
+###########################   SHADOWING   ###############################
+
+def bool_check_shadow(point, light, obj_lst):
+
+    # build the shadow ray - from intersection point to light position
+    light_direrction = light.position - point
+    light_length = np.linalg.norm(light_direrction)
+    light_direction_norm = light_direrction / light_length
+
+    shadow_ray = point + 1e-4 * light_direction_norm  # epsilon for numerical errors
+
+    shadow_ray_hits_object = closest_intersection(shadow_ray, light_direction_norm, obj_lst)
+
+    if shadow_ray_hits_object is None:
+        return False
+    
+    t, hit_point, hit_normal, obj  = shadow_ray_hits_object
+    # return True if the intersection is closer than the light - meaning the light is blocked = there is a shadow
+    return t < light_length
+
+def build_light_plane(light_direction):
+    # remember: light direction is from point to light
+    # we can’t uniquely define a perpendicular vector to a given normal    # so choose arbitrary vector w that is not parallel to light_direction
+    # so we choose arbitrary (not random) vector w that is not parallel to light_direction
+    
+    # math trick to choose w that is not parallel to light_direction
+    # if light_direction is mostly not aligned with x axis, choose x axis as w
+    if abs(light_direction[0]) < 0.9:
+        w = np.array([1, 0, 0])
+    else:
+    # choose y axis as w
+        w = np.array([0, 1, 0])
+
+    # find u that u = light_direction × w
+    u = np.cross(light_direction, w)
+    u = u / np.linalg.norm(u)
+
+     # find v that v = light_direction × u
+    v = np.cross(light_direction, u)
+    v = v / np.linalg.norm(v)
+
+    return u, v
+
+def soft_shadow(point_on_obj, light_src, obj_lst, shadow_rays_num):
+    # shadow_rays is given by scene settings
+
+    light_vec = light_src.position - point_on_obj
+    light_length = np.linalg.norm(light_vec)
+    light_dir_norm = light_vec / light_length
+
+    u, v = build_light_plane(light_dir_norm)
+
+    rays_reaching_light = 0
+    total_shadow_rays = shadow_rays_num * shadow_rays_num
+
+    # itarate over a grid of shadow_rays x shadow_rays
+    for i in range(shadow_rays_num):
+        for j in range(shadow_rays_num):
+            # choose random point inside sub-square
+            # translating the grid to be 1*1 square centered at light position
+            # np.random.rand() E [0, 1)
+            ru = (i + np.random.rand()) / shadow_rays_num - 0.5
+            rv = (j + np.random.rand()) / shadow_rays_num - 0.5
+
+            # now (ru, rv) is a random point in the light square of size 1*1 centered at light position
+            # build the vector in the light plane the points from the center of the light to the random point inside the sub-square of the grid
+            offset_vector = (ru * u + rv * v) * light_src.radius # vector = direction * length
+            new_light_src_position = light_src.position + offset_vector
+
+            new_shadow_ray = new_light_src_position - point_on_obj
+            dist = np.linalg.norm(new_shadow_ray)
+            new_shadow_ray_norm = new_shadow_ray / dist
+
+            # offset the shadow ray origin to avoid self-intersection
+            shadow_origin = point_on_obj + 1e-4 * new_shadow_ray_norm # epsilon for numerical errors
+            hit = closest_intersection(shadow_origin, new_shadow_ray_norm, obj_lst)
+
+            if hit is None: # no intersection - ray reached the light
+                rays_reaching_light += 1
+            else:
+                t, hit_point, hit_normal, obj = hit
+                if t > dist: # intersection is beyond the light source
+                    rays_reaching_light += 1
+
+    ratio = rays_reaching_light / total_shadow_rays
+
+    # light always exists but the shadow reduces its intensity
+    return (1 - light_src.shadow_intensity) + light_src.shadow_intensity * ratio
+
+
+###########################   LIGHTING   ###############################
+
 
 #########################################################
 
@@ -170,11 +304,10 @@ def closest_intersection(ray, surfaces):
 
 ## ray tracer main function ##
 
-def trace_ray(ray_origin, ray_direction, depth):
-    # Ray tracing logic
+def trace_ray(ray_origin, ray_direction, depth, scene_settings, obj_lst, lights, materials):
     pass
 
-def render_scene(camera, scene_settings, surfaces, lights, materials, image_width, image_height):
+def render_scene(camera, scene_settings, obj_lst, lights, materials, image_width, image_height):
     # Scene rendering logic
     pass
 
