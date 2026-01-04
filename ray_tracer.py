@@ -364,22 +364,15 @@ def compute_lighting(point_on_obj, normal, view_dir, material, lights,obj_lst, s
     return color
 
 
-#########################################################
+###########################   REFLECTION   ###############################
 
-## ray tracer logic finctions ##
+def reflect(direction, normal):
+    # calc return ray
+    # R = V - 2(V⋅N)N
+    return direction - 2 * np.dot(direction, normal) * normal
 
+###########################   RAY TRACER   ###############################
 
-
-#########################################################
-
-## ray tracer main function ##
-
-def trace_ray(ray_origin, ray_direction, depth, scene_settings, obj_lst, lights, materials):
-    pass
-
-def render_scene(camera, scene_settings, obj_lst, lights, materials, image_width, image_height):
-    # Scene rendering logic
-    pass
 
 #########################################################
 
