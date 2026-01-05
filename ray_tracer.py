@@ -204,26 +204,6 @@ def closest_intersection(ray_origin, ray_direction, obj_lst):
 
 ###########################   SHADOWING   ###############################
 
-def bool_check_shadow(point, light, obj_lst):
-
-    # build the shadow ray - from intersection point to light position
-    light_direrction = light.position - point
-    light_length = np.linalg.norm(light_direrction)
-    light_direction_norm = light_direrction / light_length
-
-    shadow_ray = point + 1e-4 * light_direction_norm  # epsilon for numerical errors
-
-    shadow_ray_hits_object = closest_intersection(shadow_ray, light_direction_norm, obj_lst)
-
-    if shadow_ray_hits_object is None:
-        return False
-    
-    t, hit_point, hit_normal, obj  = shadow_ray_hits_object
-    # return True if the intersection is closer than the light - meaning the light is blocked = there is a shadow
-    return t < light_length
-
-#-----------------------------------------------------------
-
 def build_light_plane(light_direction):
     # remember: light direction is from point to light
     # we can’t uniquely define a perpendicular vector to a given normal    # so choose arbitrary vector w that is not parallel to light_direction
@@ -487,7 +467,7 @@ def render_scene(camera, scene_settings,obj_lst, lights, materials,image_width, 
     aspect_ratio = image_width / image_height
     screen_height = screen_width / aspect_ratio
 
-    screen_center = cam_pos + forward * screen_dist
+    screen_center = cam_pos + forward_norm * screen_dist
 
     # iterate over pixels
     for y in range(image_height):
@@ -583,8 +563,13 @@ def main():
     camera, scene_settings, objects = parse_scene_file(args.scene_file)
 
     # TODO: Implement the ray tracer
-    image_array = render_scene(camera, scene_settings, objects, args.width, args.height)
-   
+    image_array = ray_tracer(
+        camera,
+        scene_settings,
+        objects,
+        args.width,
+        args.height
+    )
 
     # Save the output image
     save_image(image_array)
