@@ -457,12 +457,13 @@ def rec_ray_tracer(ray_origin, ray_direction, depth,scene_settings, obj_lst, lig
 
 
 ###########################   RENDER SCENE   ###############################
-## TODO CHECK THIS FUNCTION  ##
-def render_scene(camera, scene_settings,
-                 obj_lst, lights, materials,
-                 image_width, image_height):
 
-    # image buffer
+def render_scene(camera, scene_settings,obj_lst, lights, materials,image_width, image_height):
+    # up - a vector from the center of the screen to the top of the screen
+    # right - a vector from the center of the screen to the right of the screen
+
+
+    # image array with RGB values - pixels resolution
     image = np.zeros((image_height, image_width, 3))
 
     # camera parameters
@@ -472,13 +473,13 @@ def render_scene(camera, scene_settings,
 
     # camera basis vectors
     forward = look_at - cam_pos
-    forward = forward / np.linalg.norm(forward)
+    forward_norm = forward / np.linalg.norm(forward)
 
-    right = np.cross(forward, up_vec)
-    right = right / np.linalg.norm(right)
+    image_right = np.cross(forward_norm, up_vec)
+    image_right_norm = image_right / np.linalg.norm(image_right)
 
-    up = np.cross(right, forward)
-    up = up / np.linalg.norm(up)
+    image_up = np.cross(image_right_norm, forward_norm)
+    image_up_norm = image_up / np.linalg.norm(image_up)
 
     # screen geometry
     screen_dist = camera.screen_distance
@@ -499,8 +500,8 @@ def render_scene(camera, scene_settings,
             # pixel position on the screen
             pixel_pos = (
                 screen_center +
-                px * screen_width * right +
-                py * screen_height * up
+                px * screen_width * image_right_norm +
+                py * screen_height * image_up_norm
             )
 
             # build ray
@@ -582,9 +583,8 @@ def main():
     camera, scene_settings, objects = parse_scene_file(args.scene_file)
 
     # TODO: Implement the ray tracer
-
-    # Dummy result
-    image_array = np.zeros((500, 500, 3))
+    image_array = render_scene(camera, scene_settings, objects, args.width, args.height)
+   
 
     # Save the output image
     save_image(image_array)
