@@ -13,19 +13,6 @@ from surfaces.cube import Cube
 from surfaces.infinite_plane import InfinitePlane
 from surfaces.sphere import Sphere
 
-#########################################################
-
-## math functions ##
-
-## def normalize(v) = v / np.linalg.norm(v)
-
-## def dot(a, b) = np.dot(a, b)
-
-## def cross(a, b) = np.cross(a, b)
-
-## def distance(a, b) = np.linalg.norm(a - b)
-
-## def length(v) = np.linalg.norm(v)
 
 #######################   helper functions   ###########################
 
@@ -212,7 +199,7 @@ def closest_intersection(ray_origin, ray_direction, obj_lst):
 
 def build_light_plane(light_direction):
     # remember: light direction is from point to light
-    # we can’t uniquely define a perpendicular vector to a given normal    # so choose arbitrary vector w that is not parallel to light_direction
+    # we can’t uniquely define a perpendicular vector to a given normal 
     # so we choose arbitrary (not random) vector w that is not parallel to light_direction
     
     # math trick to choose w that is not parallel to light_direction
