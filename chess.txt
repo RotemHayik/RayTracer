@@ -1,0 +1,68 @@
+# 4x4 chess board with a floating reflective ball
+
+# Camera:   px    py    pz    lx    ly    lz    ux    uy    uz    sc_dist  sc_width
+cam         -0.4    2   3     0.1    2    -2     0   1   0    4.0      5.0
+
+
+# Settings: bgr   bgg   bgb   sh_rays  rec_max 
+set         0.7   0.8   1.0   4        8
+
+# Materials:
+# 1 - White square
+# 2 - Black square
+# 3 - Reflective ball
+# 4 - Dark floor
+
+# mtl:      dr     dg     db    sr    sg    sb    rr    rg    rb    phong  trans
+mtl         0.90   0.90   0.90  0.3   0.3   0.3   0.02  0.02  0.02  15     0    
+mtl         0.10   0.10   0.10  0.3   0.3   0.3   0.02  0.02  0.02  15     0     
+mtl         0.20   0.20   0.25  1.0   1.0   1.0   0.80  0.80  0.80  100    0     
+mtl         0.40   0.40   0.40  0.1   0.1   0.1   0.00  0.00  0.00  5      0     
+
+# Plane:    nx    ny    nz    offset   mat_idx
+# Dark floor plane at y = 0
+pln         0     1     0     0        4
+
+# 4x4 chess board as cubes.
+# Each cube has edge length 1 and sits on the floor y = 0 (center at y = 0.5).
+# Coordinates:
+#   x in [-1.5, -0.5, 0.5, 1.5]
+#   z in [-1.5, -0.5, 0.5, 1.5]
+# Pattern: (row + col) even -> white (mat 1), odd -> black (mat 2)
+
+# Boxes:    cx      cy    cz      scale  mat_idx
+
+# Row 0 (near -z, z = -1.5)
+box        -1.5     0.5  -1.5     1      1
+box        -0.5     0.5  -1.5     1      2
+box         0.5     0.5  -1.5     1      1
+box         1.5     0.5  -1.5     1      2
+
+# Row 1 (z = -0.5)
+box        -1.5     0.5  -0.5     1      2
+box        -0.5     0.5  -0.5     1      1
+box         0.5     0.5  -0.5     1      2
+box         1.5     0.5  -0.5     1      1
+
+# Row 2 (z = 0.5)
+box        -1.5     0.5   0.5     1      1
+box        -0.5     0.5   0.5     1      2
+box         0.5     0.5   0.5     1      1
+box         1.5     0.5   0.5     1      2
+
+# Row 3 (far +z, z = 1.5)
+box        -1.5     0.5   1.5     1      2
+box        -0.5     0.5   1.5     1      1
+box         0.5     0.5   1.5     1      2
+box         1.5     0.5   1.5     1      1
+
+# Floating reflective ball over the center of the board
+# Center of board is at (0, 0.5, 0), lift it to y=2.0
+# Sphere:   cx    cy    cz    radius  mat_idx
+sph         0     2.0   0      0.7    3
+
+# Lights:   px    py    pz    r      g      b      spec  shadow  width
+# Main light above and slightly in front
+lgt         4     8     6     1.0    1.0    1.0    1.0   0.8     1.5
+# Fill light on the opposite side
+lgt        -4     6    -3     0.7    0.7    0.9    1.0   0.5     2.0

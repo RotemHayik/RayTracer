@@ -5,6 +5,7 @@ import numpy as np
 
 from camera import Camera
 from light import Light
+import light
 from material import Material
 from scene_settings import SceneSettings
 import surfaces
@@ -123,12 +124,13 @@ def intersect_plane(ray_origin, ray_direction, plane):
 
 def intersect_cube(ray_origin, ray_direction, cube):
 
+    pos = np.array(cube.position, dtype=float)
     # calculate the bounds of the cube
     half = cube.scale / 2.0
     # left lower back corner 
-    min_bound = cube.position - half
+    min_bound = pos - half
     # right upper front corner
-    max_bound = cube.position + half
+    max_bound = pos + half
 
     # ray-box intersection points
     # t_near is the largest entering t value from all axis
@@ -171,6 +173,10 @@ def intersect_cube(ray_origin, ray_direction, cube):
     # ray can be inside the box, so we take the nearest positive t
     t_hit = t_near if t_near > 1e-6 else t_far
     hit_point = ray_origin + t_hit * ray_direction
+
+    # ensure normal points against the ray
+    if np.dot(hit_normal, ray_direction) > 0:
+        hit_normal = -hit_normal
 
     return t_hit, hit_point, hit_normal   
 
@@ -241,6 +247,8 @@ def soft_shadow(point_on_obj, light_src, obj_lst, shadow_rays_num):
     u, v = build_light_plane(light_dir_norm)
 
     rays_reaching_light = 0
+
+    shadow_rays_num = int(shadow_rays_num)
     total_shadow_rays = shadow_rays_num * shadow_rays_num
 
     # itarate over a grid of shadow_rays x shadow_rays
@@ -291,7 +299,11 @@ def compute_diffuse(material, light, normal, light_dir):
     # diffuse cant be negative
     N_dot_L = max(0.0, np.dot(normal, light_dir))
 
-    return material.diffuse_color * light.color * N_dot_L
+    Kd = np.array(material.diffuse_color, dtype=float)
+    Ip = np.array(light.color, dtype=float)
+
+    return Kd * Ip * N_dot_L
+
 
 
 #-----------------------------------------------------------
@@ -313,7 +325,10 @@ def compute_specular(material, light, normal, light_dir, view_dir):
     # specular cant be negative
     R_dot_V = max(0.0, np.dot(R_norm, view_dir))
 
-    return material.specular_color * light.color * (R_dot_V ** material.shininess)
+    Ks = np.array(material.specular_color, dtype=float)
+    Ip = np.array(light.color, dtype=float)
+
+    return Ks * Ip * (R_dot_V ** material.shininess)
 
 #-----------------------------------------------------------
 
@@ -330,7 +345,8 @@ def compute_lighting(point_on_obj, normal, view_dir, material, lights,obj_lst, s
 
         diffuse = compute_diffuse(material, light, normal, light_dir_norm)
         specular = compute_specular(material, light, normal, light_dir_norm, view_dir)
-        soft_shadow_factor = soft_shadow(point_on_obj,light,obj_lst,scene_settings.shadow_rays)
+        specular *= light.specular_intensity
+        soft_shadow_factor = soft_shadow(point_on_obj,light,obj_lst,scene_settings.root_number_shadow_rays)
 
         color += soft_shadow_factor * (diffuse + specular)
 
@@ -358,8 +374,7 @@ def ray_tracer(camera, scene_settings, objects, image_width, image_height):
     obj_lst, lights, materials = organize_scene(objects)
 
     # render image
-    image = render_scene(camera,scene_settings,obj_lst,lights,materials,image_width,image_height
-    )
+    image = render_scene(camera,scene_settings,obj_lst,lights,materials,image_width,image_height)
 
     return image
 
@@ -375,10 +390,10 @@ def rec_ray_tracer(ray_origin, ray_direction, depth,scene_settings, obj_lst, lig
 
     # ray missed all objects, therefore return background color
     if hit is None:
-        return scene_settings.background_color
+        return np.array(scene_settings.background_color, dtype=float)
 
     t, hit_point, normal, surface = hit
-    material = materials[surface.material_index]
+    material = materials[surface.material_index-1]
 
     # specular depends on the view direction
     # calc view direction (towards camera)
@@ -390,7 +405,7 @@ def rec_ray_tracer(ray_origin, ray_direction, depth,scene_settings, obj_lst, lig
     color = compute_lighting(hit_point,normal,view_dir_norm, material,lights,obj_lst,scene_settings)
 
     # calc reflection
-    if material.reflection > 0:
+    if np.any(material.reflection_color):
         reflect_dir = reflect(ray_direction, normal)
         reflect_dir_norm = reflect_dir / np.linalg.norm(reflect_dir)
         reflect_origin = hit_point + 1e-4 * reflect_dir_norm
@@ -405,7 +420,9 @@ def rec_ray_tracer(ray_origin, ray_direction, depth,scene_settings, obj_lst, lig
             materials
         )
 
-        color += material.reflection * reflected_color
+        Kr = np.array(material.reflection_color, dtype=float)
+        color += Kr * reflected_color
+
 
     # calc transparency
     if material.transparency > 0:
@@ -449,13 +466,13 @@ def render_scene(camera, scene_settings,obj_lst, lights, materials,image_width, 
     # camera parameters
     cam_pos = np.array(camera.position)
     look_at = np.array(camera.look_at)
-    up_vec = np.array(camera.up)
+    up_vec = np.array(camera.up_vector)
 
     # camera basis vectors
     forward = look_at - cam_pos
     forward_norm = forward / np.linalg.norm(forward)
 
-    image_right = np.cross(forward_norm, up_vec)
+    image_right = np.cross(up_vec, forward_norm)
     image_right_norm = image_right / np.linalg.norm(image_right)
 
     image_up = np.cross(image_right_norm, forward_norm)
@@ -475,7 +492,8 @@ def render_scene(camera, scene_settings,obj_lst, lights, materials,image_width, 
 
             # normalized pixel coordinates in range [-0.5, 0.5]
             px = (x + 0.5) / image_width - 0.5
-            py = 0.5 - (y + 0.5) / image_height
+            py = (y + 0.5) / image_height - 0.5
+
 
             # pixel position on the screen
             pixel_pos = (
@@ -492,7 +510,7 @@ def render_scene(camera, scene_settings,obj_lst, lights, materials,image_width, 
             color = rec_ray_tracer(
                 cam_pos,
                 ray_dir,
-                scene_settings.max_recursion,
+                scene_settings.max_recursions,
                 scene_settings,
                 obj_lst,
                 lights,
