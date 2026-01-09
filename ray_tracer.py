@@ -15,6 +15,7 @@ from surfaces.sphere import Sphere
 
 import time
 
+EPSILON = 1e-4
 
 #######################   helper functions   ###########################
 
@@ -49,26 +50,25 @@ def intersect_sphere(ray_origin, ray_direction, sphere):
 
     # t_ca = L . V
     t_ca = np.dot(L, ray_direction)
-    if t_ca < 1e-6:
-        return None # sphere is behind the ray
 
-    # d^2 = L . L - t_ca^2
-    sqrt_d = np.dot(L, L) - t_ca**2
-    sqrt_r = sphere.radius ** 2
-    if sqrt_d > sqrt_r:
-        return None # no intersection
+    # d^2 = |L|^2 - t_ca^2  (perpendicular distance squared from ray to sphere center)
+    d_squared = np.dot(L, L) - t_ca**2
+    r_squared = sphere.radius ** 2
+
+    if d_squared > r_squared:
+        return None # ray misses the sphere
 
     # intersections distances along the ray
-    t_hc = np.sqrt(sqrt_r - sqrt_d)
+    t_hc = np.sqrt(r_squared - d_squared)
     t1 = t_ca - t_hc
     t2 = t_ca + t_hc
 
     t = None
-    if t1 > 1e-6 and t2 > 1e-6:
+    if t1 > EPSILON and t2 > EPSILON:
         t = min(t1, t2) # returns closest intersection
-    elif t1 > 1e-6:
+    elif t1 > EPSILON:
         t = t1 # returns the intersection in front of the ray
-    elif t2 > 1e-6:
+    elif t2 > EPSILON:
         t = t2 # returns the intersection in front of the ray
     else:
         return None
@@ -91,13 +91,13 @@ def intersect_plane(ray_origin, ray_direction, plane):
     c = plane.offset
 
     V_dot_N = np.dot(ray_direction, N)
-    if abs(V_dot_N) < 1e-6: # "equal to zero" - ray is parallel to the plane
+    if abs(V_dot_N) < EPSILON: # "equal to zero" - ray is parallel to the plane
         return None  # no intersection
 
     # place the ray origin in the plane equation
     # find t in the ray equation = t = (c - P0 . N) / (V . N)
     t = (c - np.dot(ray_origin, N)) / V_dot_N
-    if t < 1e-6:
+    if t < EPSILON:
         return None # plane is behind the ray
 
     hit_point = ray_origin + t * ray_direction
@@ -129,7 +129,7 @@ def intersect_cube(ray_origin, ray_direction, cube):
     hit_normal = None
 
     for i in range(3):  # x, y, z
-        if abs(ray_direction[i]) < 1e-6: # Ray is not moving in this axis
+        if abs(ray_direction[i]) < EPSILON: # Ray is not moving in this axis
             # Check if the ray origin is inside the cube bounds on this axis
             if ray_origin[i] < min_bound[i] or ray_origin[i] > max_bound[i]:
                 return None
@@ -155,12 +155,12 @@ def intersect_cube(ray_origin, ray_direction, cube):
                 return None
 
     # box is behind the ray
-    if t_far < 1e-6:
+    if t_far < EPSILON:
         return None
 
     # box survived tests, intersection occurs at t_near
     # ray can be inside the box, so we take the nearest positive t
-    t_hit = t_near if t_near > 1e-6 else t_far
+    t_hit = t_near if t_near > EPSILON else t_far
     hit_point = ray_origin + t_hit * ray_direction
 
     # ensure normal points against the ray
@@ -261,7 +261,7 @@ def soft_shadow(point_on_obj, light_src, obj_lst, shadow_rays_num):
             new_shadow_ray_norm = new_shadow_ray / dist
 
             # offset the shadow ray origin to avoid self-intersection
-            shadow_origin = point_on_obj + 1e-4 * new_shadow_ray_norm # epsilon for numerical errors
+            shadow_origin = point_on_obj + EPSILON * new_shadow_ray_norm # epsilon for numerical errors
             hit = closest_intersection(shadow_origin, new_shadow_ray_norm, obj_lst)
 
             if hit is None: # no intersection - ray reached the light
@@ -279,7 +279,7 @@ def soft_shadow(point_on_obj, light_src, obj_lst, shadow_rays_num):
 
 ###########################   LIGHTING   ###############################
 
-def compute_diffuse(material, light, normal, light_dir):
+def compute_diffuse(Kd, Ip, normal, light_dir):
     # Idiff​=Kd​⋅Ip​⋅(N⋅L)
     # Kd = material.diffuse_color
     # Ip = light.color
@@ -289,9 +289,6 @@ def compute_diffuse(material, light, normal, light_dir):
     # diffuse cant be negative
     N_dot_L = max(0.0, np.dot(normal, light_dir))
 
-    Kd = np.array(material.diffuse_color, dtype=float)
-    Ip = np.array(light.color, dtype=float)
-
     return Kd * Ip * N_dot_L
 
 
@@ -299,7 +296,7 @@ def compute_diffuse(material, light, normal, light_dir):
 #-----------------------------------------------------------
 
 
-def compute_specular(material, light, normal, light_dir, view_dir):
+def compute_specular(Ks, Ip, shininess, normal, light_dir, view_dir):
     # Ispec​=Ks​⋅Ip​⋅cosn(ϕ)=Ks​⋅Ip​⋅(R⋅V)n
     # Ks = material.specular_color
     # Ip = light.color
@@ -315,39 +312,38 @@ def compute_specular(material, light, normal, light_dir, view_dir):
     # specular cant be negative
     R_dot_V = max(0.0, np.dot(R_norm, view_dir))
 
-    Ks = np.array(material.specular_color, dtype=float)
-    Ip = np.array(light.color, dtype=float)
-
-    return Ks * Ip * (R_dot_V ** material.shininess)
+    return Ks * Ip * (R_dot_V ** shininess)
 
 #-----------------------------------------------------------
 
-def compute_lighting(point_on_obj, normal, view_dir, material, lights,obj_lst, scene_settings):
+def compute_lighting(point_on_obj, normal, view_dir, material, lights, obj_lst, scene_settings):
 
     # RGB color initialized to black
     color = np.zeros(3)
 
+    # Pre-convert material colors to numpy arrays (avoid repeated conversion in inner loop)
+    Kd = np.array(material.diffuse_color, dtype=float)
+    Ks = np.array(material.specular_color, dtype=float)
+    shininess = material.shininess
+
     for light in lights:
+        # Pre-convert light color to numpy array
+        Ip = np.array(light.color, dtype=float)
+        light_pos = np.array(light.position, dtype=float)
+
         # build light ray
-        light_vec = light.position - point_on_obj
+        light_vec = light_pos - point_on_obj
         light_length = np.linalg.norm(light_vec)
         light_dir_norm = light_vec / light_length
 
-        diffuse = compute_diffuse(material, light, normal, light_dir_norm)
-        specular = compute_specular(material, light, normal, light_dir_norm, view_dir)
+        diffuse = compute_diffuse(Kd, Ip, normal, light_dir_norm)
+        specular = compute_specular(Ks, Ip, shininess, normal, light_dir_norm, view_dir)
         specular *= light.specular_intensity
-        soft_shadow_factor = soft_shadow(point_on_obj,light,obj_lst,scene_settings.root_number_shadow_rays)
+        soft_shadow_factor = soft_shadow(point_on_obj, light, obj_lst, scene_settings.root_number_shadow_rays)
 
         color += soft_shadow_factor * (diffuse + specular)
 
-    # color values range correction to [0, 1]
-    for i in range(3):
-        if color[i] < 0:
-            color[i] = 0
-        elif color[i] > 1:
-            color[i] = 1
-
-    return color
+    return np.clip(color, 0, 1)
 
 
 ###########################   REFLECTION   ###############################
@@ -400,7 +396,7 @@ def rec_ray_tracer(ray_origin, ray_direction, depth,scene_settings, obj_lst, lig
     if np.any(material.reflection_color):
         reflect_dir = reflect(ray_direction, normal)
         reflect_dir_norm = reflect_dir / np.linalg.norm(reflect_dir)
-        reflect_origin = hit_point + 1e-4 * reflect_dir_norm
+        reflect_origin = hit_point + EPSILON * reflect_dir_norm
 
         reflected_color = rec_ray_tracer(
             reflect_origin,
@@ -419,7 +415,7 @@ def rec_ray_tracer(ray_origin, ray_direction, depth,scene_settings, obj_lst, lig
 
     # calc color returning from transparency
     if material.transparency > 0:
-        trans_origin = hit_point + 1e-4 * ray_direction
+        trans_origin = hit_point + EPSILON * ray_direction
 
         transparent_color = rec_ray_tracer(
             trans_origin,
@@ -437,14 +433,7 @@ def rec_ray_tracer(ray_origin, ray_direction, depth,scene_settings, obj_lst, lig
             material.transparency * transparent_color
         )
 
-    # color values range correction to [0, 1]
-    for i in range(3):
-        if color[i] < 0:
-            color[i] = 0
-        elif color[i] > 1:
-            color[i] = 1
-
-    return color
+    return np.clip(color, 0, 1)
 
 
 ###########################   RENDER SCENE   ###############################
@@ -465,7 +454,7 @@ def render_scene(camera, scene_settings,obj_lst, lights, materials,image_width, 
     forward = look_at - cam_pos
     forward_norm = forward / np.linalg.norm(forward)
 
-    image_right = np.cross(forward_norm, up_vec)
+    image_right = np.cross(up_vec, forward_norm)
     image_right_norm = image_right / np.linalg.norm(image_right)
 
     image_up = np.cross(image_right_norm, forward_norm)
@@ -480,15 +469,22 @@ def render_scene(camera, scene_settings,obj_lst, lights, materials,image_width, 
     screen_center = cam_pos + forward_norm * screen_dist
 
     # iterate over pixels
+    start_time = time.time()
     for y in range(image_height):
-        print(f"Rendering row {y+1} of {image_height}", end='\r')
+        elapsed = time.time() - start_time
+        rows_done = y + 1
+        if y > 0:
+            time_per_row = elapsed / y
+            eta_seconds = time_per_row * (image_height - y)
+            print(f"Row {rows_done}/{image_height} | Elapsed: {elapsed:.1f}s | ETA: {eta_seconds:.1f}s    ", end='\r')
+        else:
+            print(f"Row {rows_done}/{image_height} | Elapsed: {elapsed:.1f}s | ETA: calculating...    ", end='\r')
 
         for x in range(image_width):
 
             # normalized pixel coordinates in range [-0.5, 0.5]
             px = (x + 0.5) / image_width - 0.5
-            py = 0.5 - (y + 0.5) / image_height
-
+            py = (y + 0.5) / image_height - 0.5
 
             # pixel position on the screen
             pixel_pos = (
