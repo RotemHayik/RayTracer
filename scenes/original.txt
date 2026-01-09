@@ -1,0 +1,70 @@
+# Minimal box scene with hidden light
+# Background is black
+
+# Camera
+# px   py   pz    lx   ly   lz    ux   uy   uz   sc_dist  sc_width
+cam     0    1.5   6     0    1    0     0    1    0    2.5      3.0
+
+
+# Scene settings
+# bgr  bgg  bgb   sh_rays  rec_max
+set     0    0    0        4        6
+
+
+# =======================
+# Materials
+# =======================
+
+# 1 - White wall / floor
+mtl     0.90   0.90   0.90   0.3   0.3   0.3   0.02  0.02  0.02  15    0
+
+# 2 - Left wall (dark)
+mtl     0.1    0.1    0.1    1.0   1.0   1.0   0.1   0.1   0.1   30    0
+
+# 3 - Right wall (green)
+mtl     0.3    0.8    0.0    0.0   0.0   0.0   0.0   0.0   0.0    1    0
+
+# 4 - Box (light blue)
+mtl     0.7    0.8    1.0    0.3   0.3   0.3   0.05  0.05  0.05  20    0
+
+# 5 - Ball (glossy reflective)
+mtl     0.20   0.20   0.25   1.0   1.0   1.0   0.80  0.80  0.80  100   0
+
+
+# =======================
+# Walls (no ceiling!)
+# =======================
+
+# Floor (y = 0)
+pln     0    1    0     0     1
+
+# Back wall (z = -4)
+pln     0    0    1    -4     1
+
+# Left wall (x = -3)
+pln     1    0    0    -3     2
+
+# Right wall (x = 3)
+pln    -1    0    0    -3     3
+
+
+# =======================
+# Objects
+# =======================
+
+# Box in the center
+box     0    0.75   0     1.5    4
+
+# Floating reflective ball
+sph     0    2.2    0     0.6    5
+
+
+# =======================
+# Lights (hidden source)
+# =======================
+
+# Overhead soft light (not visible)
+lgt     0    5    0     1.0   1.0   1.0   1.0   0.9   2.5
+
+# Side fill light
+lgt     3    3    2     0.6   0.6   0.6   0.6   0.5   2.0

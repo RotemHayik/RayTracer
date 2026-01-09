@@ -1,0 +1,21 @@
+# ===== Camera =====
+# Camera looking straight down -Z
+cam 0   0   5     0   0   0     0   1   0     1   2
+
+# ===== Scene settings =====
+# black background, no recursion, no soft shadows
+set     0   0   0     1   1
+
+# ===== Materials =====
+# White matte material
+mtl     1   1   1     0   0   0     0   0   0     1   0
+
+# ===== Objects =====
+# Horizontal plane at z = 0
+pln     0   0   1     0     1
+
+# ===== Light =====
+# Light on the RIGHT side
+lgt     3   3   5     1   1   1     1   0   0
+
+#[ DARK ] →→→ [ BRIGHT ]

@@ -13,6 +13,8 @@ from surfaces.cube import Cube
 from surfaces.infinite_plane import InfinitePlane
 from surfaces.sphere import Sphere
 
+import time
+
 
 #######################   helper functions   ###########################
 
@@ -241,6 +243,8 @@ def soft_shadow(point_on_obj, light_src, obj_lst, shadow_rays_num):
     # itarate over a grid of shadow_rays x shadow_rays
     for i in range(shadow_rays_num):
         for j in range(shadow_rays_num):
+
+           
             # choose random point inside sub-square
             # translating the grid to be 1*1 square centered at light position
             # np.random.rand() E [0, 1)
@@ -276,12 +280,11 @@ def soft_shadow(point_on_obj, light_src, obj_lst, shadow_rays_num):
 ###########################   LIGHTING   ###############################
 
 def compute_diffuse(material, light, normal, light_dir):
-    # Idiff​=Kd​⋅Ip​⋅cos(θ)=Kd​⋅Ip​⋅(N⋅L)
+    # Idiff​=Kd​⋅Ip​⋅(N⋅L)
     # Kd = material.diffuse_color
     # Ip = light.color
     # N = normal
     # L = light_dir (normalized)
-    # cos(θ) = N . L
 
     # diffuse cant be negative
     N_dot_L = max(0.0, np.dot(normal, light_dir))
@@ -370,9 +373,10 @@ def ray_tracer(camera, scene_settings, objects, image_width, image_height):
 def rec_ray_tracer(ray_origin, ray_direction, depth,scene_settings, obj_lst, lights, materials):
 
     # stopping condition
+    # from now on, rays contribute no light
     if depth <= 0:
-        return np.zeros(3) # black
-
+        return np.array(scene_settings.background_color, dtype=float)
+    
     hit = closest_intersection(ray_origin, ray_direction, obj_lst)
 
     # ray missed all objects, therefore return background color
@@ -391,7 +395,8 @@ def rec_ray_tracer(ray_origin, ray_direction, depth,scene_settings, obj_lst, lig
     # calc lighting = diffuse + specular + soft shadow
     color = compute_lighting(hit_point,normal,view_dir_norm, material,lights,obj_lst,scene_settings)
 
-    # calc reflection
+    # calc color returning from reflection
+    # if the material has reflection color (one of the RGB is non zero)
     if np.any(material.reflection_color):
         reflect_dir = reflect(ray_direction, normal)
         reflect_dir_norm = reflect_dir / np.linalg.norm(reflect_dir)
@@ -408,10 +413,11 @@ def rec_ray_tracer(ray_origin, ray_direction, depth,scene_settings, obj_lst, lig
         )
 
         Kr = np.array(material.reflection_color, dtype=float)
+        # the returning color adds to the original color
         color += Kr * reflected_color
 
 
-    # calc transparency
+    # calc color returning from transparency
     if material.transparency > 0:
         trans_origin = hit_point + 1e-4 * ray_direction
 
@@ -425,6 +431,7 @@ def rec_ray_tracer(ray_origin, ray_direction, depth,scene_settings, obj_lst, lig
             materials
         )
 
+        # the returning color blends with the original color
         color = (
             (1 - material.transparency) * color +
             material.transparency * transparent_color
@@ -446,8 +453,7 @@ def render_scene(camera, scene_settings,obj_lst, lights, materials,image_width, 
     # up - a vector from the center of the screen to the top of the screen
     # right - a vector from the center of the screen to the right of the screen
 
-
-    # image array with RGB values - pixels resolution
+    # image array with RGB values
     image = np.zeros((image_height, image_width, 3))
 
     # camera parameters
@@ -459,7 +465,7 @@ def render_scene(camera, scene_settings,obj_lst, lights, materials,image_width, 
     forward = look_at - cam_pos
     forward_norm = forward / np.linalg.norm(forward)
 
-    image_right = np.cross(up_vec, forward_norm)
+    image_right = np.cross(forward_norm, up_vec)
     image_right_norm = image_right / np.linalg.norm(image_right)
 
     image_up = np.cross(image_right_norm, forward_norm)
@@ -475,11 +481,13 @@ def render_scene(camera, scene_settings,obj_lst, lights, materials,image_width, 
 
     # iterate over pixels
     for y in range(image_height):
+        print(f"Rendering row {y+1} of {image_height}", end='\r')
+
         for x in range(image_width):
 
             # normalized pixel coordinates in range [-0.5, 0.5]
             px = (x + 0.5) / image_width - 0.5
-            py = (y + 0.5) / image_height - 0.5
+            py = 0.5 - (y + 0.5) / image_height
 
 
             # pixel position on the screen
@@ -491,12 +499,12 @@ def render_scene(camera, scene_settings,obj_lst, lights, materials,image_width, 
 
             # build ray
             ray_dir = pixel_pos - cam_pos
-            ray_dir = ray_dir / np.linalg.norm(ray_dir)
+            ray_dir_norm = ray_dir / np.linalg.norm(ray_dir)
 
             # trace ray
             color = rec_ray_tracer(
                 cam_pos,
-                ray_dir,
+                ray_dir_norm,
                 scene_settings.max_recursions,
                 scene_settings,
                 obj_lst,
@@ -566,7 +574,8 @@ def main():
     # Parse the scene file
     camera, scene_settings, objects = parse_scene_file(args.scene_file)
 
-    # TODO: Implement the ray tracer
+    time_start = time.time()
+
     image_array = ray_tracer(
         camera,
         scene_settings,
@@ -574,6 +583,9 @@ def main():
         args.width,
         args.height
     )
+
+    time_end = time.time()
+    print(f"Rendering time: {time_end - time_start} seconds")
 
     # Save the output image
     save_image(image_array, args.output_image)
