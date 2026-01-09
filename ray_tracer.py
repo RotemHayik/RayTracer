@@ -13,8 +13,6 @@ from surfaces.cube import Cube
 from surfaces.infinite_plane import InfinitePlane
 from surfaces.sphere import Sphere
 
-import time
-
 EPSILON = 1e-4
 
 #######################   helper functions   ###########################
@@ -51,7 +49,7 @@ def intersect_sphere(ray_origin, ray_direction, sphere):
     # t_ca = L . V
     t_ca = np.dot(L, ray_direction)
 
-    # d^2 = |L|^2 - t_ca^2  (perpendicular distance squared from ray to sphere center)
+    # d^2 = L . L - t_ca^2
     d_squared = np.dot(L, L) - t_ca**2
     r_squared = sphere.radius ** 2
 
@@ -321,13 +319,13 @@ def compute_lighting(point_on_obj, normal, view_dir, material, lights, obj_lst, 
     # RGB color initialized to black
     color = np.zeros(3)
 
-    # Pre-convert material colors to numpy arrays (avoid repeated conversion in inner loop)
+    # pre-convert material colors to numpy arrays (so no repeated conversion in inner loop)
     Kd = np.array(material.diffuse_color, dtype=float)
     Ks = np.array(material.specular_color, dtype=float)
     shininess = material.shininess
 
     for light in lights:
-        # Pre-convert light color to numpy array
+        # pre-convert light color to numpy array
         Ip = np.array(light.color, dtype=float)
         light_pos = np.array(light.position, dtype=float)
 
@@ -469,17 +467,7 @@ def render_scene(camera, scene_settings,obj_lst, lights, materials,image_width, 
     screen_center = cam_pos + forward_norm * screen_dist
 
     # iterate over pixels
-    start_time = time.time()
     for y in range(image_height):
-        elapsed = time.time() - start_time
-        rows_done = y + 1
-        if y > 0:
-            time_per_row = elapsed / y
-            eta_seconds = time_per_row * (image_height - y)
-            print(f"Row {rows_done}/{image_height} | Elapsed: {elapsed:.1f}s | ETA: {eta_seconds:.1f}s    ", end='\r')
-        else:
-            print(f"Row {rows_done}/{image_height} | Elapsed: {elapsed:.1f}s | ETA: calculating...    ", end='\r')
-
         for x in range(image_width):
 
             # normalized pixel coordinates in range [-0.5, 0.5]
@@ -570,8 +558,6 @@ def main():
     # Parse the scene file
     camera, scene_settings, objects = parse_scene_file(args.scene_file)
 
-    time_start = time.time()
-
     image_array = ray_tracer(
         camera,
         scene_settings,
@@ -579,9 +565,6 @@ def main():
         args.width,
         args.height
     )
-
-    time_end = time.time()
-    print(f"Rendering time: {time_end - time_start} seconds")
 
     # Save the output image
     save_image(image_array, args.output_image)
