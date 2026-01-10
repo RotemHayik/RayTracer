@@ -1,0 +1,112 @@
+# Beach Day Scene
+# Water plane at y=0 (reflective), sand box rising above water, palm trees
+
+# Camera: 	px   	py   	pz 	lx  	ly  	lz 	ux  	uy  	uz 	sc_dist	sc_width
+cam 		0   	4	12 	0   	1   	-20  	0   	1   	0  	1.5	2.5
+
+# Settings: 	bgr  	bgg  	bgb	sh_rays	rec_max
+# Light sky blue (135, 206, 250)
+set 		0.53  	0.81  	0.98   	3 	6
+
+# Materials (1-indexed)
+# Material:	dr    	dg    	db	sr   	sg   	sb 	rr   	rg  	rb	phong 	trans
+
+# 1: Ocean water - deep blue with moderate reflection
+mtl		0.0	0.12	0.35	0.25	0.35	0.45	0.2	0.25	0.3	60	0
+
+# 2: Sand - warm beige (no reflection)
+mtl		0.9	0.8	0.6	0.05	0.05	0.05	0.0	0.0	0.0	5	0
+
+# 3: Palm trunk - brown
+mtl		0.4	0.25	0.1	0.1	0.1	0.1	0.0	0.0	0.0	5	0
+
+# 4: Palm leaves - green
+mtl		0.1	0.5	0.15	0.15	0.2	0.15	0.0	0.0	0.0	10	0
+
+# 5: Coconut - dark brown
+mtl		0.25	0.15	0.08	0.1	0.1	0.1	0.0	0.0	0.0	8	0
+
+# 6: Beach ball red
+mtl		0.95	0.1	0.1	0.6	0.6	0.6	0.05	0.02	0.02	40	0
+
+# 7: Beach ball yellow
+mtl		0.95	0.9	0.1	0.6	0.6	0.6	0.05	0.05	0.01	40	0
+
+# 8: Beach ball blue
+mtl		0.1	0.3	0.95	0.6	0.6	0.6	0.02	0.03	0.05	40	0
+
+# Geometry
+
+# Water plane at y=0 (reflective turquoise)
+# Plane: 	nx	ny	nz	offset	mat_idx
+pln		0	1	0	0	1
+
+# Sand - large box with top surface at y=0.15 (just above water)
+# Using scale=24, positioned closer to camera for width without excess depth
+# Cube:		cx	cy	cz	scale	mat_idx
+box		0	-11.85	10	24	2
+
+# === PALM TREE 1 (left, large, foreground) ===
+box		-4	0.65	6	1.0	3
+box		-4	1.55	6	0.9	3
+box		-4	2.35	6	0.8	3
+box		-4	3.05	6	0.7	3
+box		-4	3.65	6	0.6	3
+
+# Palm 1 leaves
+# Spheres:	cx   	cy   	cz  	radius 	mat_idx
+sph		-4	4.3	6	0.95	4
+sph		-5.3	4.0	5.7	0.6	4
+sph		-2.7	4.0	6.3	0.6	4
+sph		-4.6	3.8	6.8	0.5	4
+sph		-3.4	3.8	5.2	0.5	4
+sph		-5.6	3.6	6.2	0.45	4
+sph		-2.4	3.6	5.8	0.45	4
+
+# Palm 1 coconuts
+sph		-4.2	4.0	6.2	0.18	5
+sph		-3.75	3.95	5.85	0.18	5
+
+# === PALM TREE 2 (right, medium) ===
+box		5	0.55	4	0.85	3
+box		5	1.35	4	0.75	3
+box		5	2.0	4	0.65	3
+box		5	2.55	4	0.55	3
+
+# Palm 2 leaves
+sph		5	3.1	4	0.75	4
+sph		4.0	2.85	3.8	0.5	4
+sph		6.0	2.85	4.2	0.5	4
+sph		4.5	2.7	4.6	0.4	4
+sph		5.5	2.7	3.4	0.4	4
+
+# Palm 2 coconuts
+sph		5.15	2.9	4.15	0.15	5
+sph		4.85	2.85	3.9	0.15	5
+
+# === PALM TREE 3 (center-right, small, farther back) ===
+box		2	0.45	-1	0.7	3
+box		2	1.1	-1	0.6	3
+box		2	1.6	-1	0.5	3
+box		2	2.0	-1	0.4	3
+
+# Palm 3 leaves
+sph		2	2.4	-1	0.55	4
+sph		1.3	2.2	-1.2	0.35	4
+sph		2.7	2.2	-0.8	0.35	4
+sph		1.6	2.1	-0.5	0.3	4
+sph		2.4	2.1	-1.5	0.3	4
+
+# === BEACH BALLS floating on water ===
+# Spheres sit at y=radius so they rest on y=0 water plane
+sph		-1.5	0.4	3	0.4	6
+sph		2.5	0.35	1	0.35	7
+sph		-0.5	0.3	-3	0.3	8
+
+# Lights: 	px	py	pz	r	g	b	spec	shadow	width
+# Main sunlight - bright white/yellow from high above
+lgt		0	30	-20	1.0	1.0	0.9	0.9	0.8	8
+
+# Soft fill light from front - slight blue tint for sky reflection
+lgt		5	15	20	0.5	0.55	0.6	0.4	0.5	10
+

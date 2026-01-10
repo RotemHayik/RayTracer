@@ -1,7 +1,9 @@
 import argparse
-from turtle import color
 from PIL import Image
 import numpy as np
+from multiprocessing import Pool, cpu_count
+import time
+from numba import njit
 
 from camera import Camera
 from light import Light
@@ -15,185 +17,355 @@ from surfaces.sphere import Sphere
 
 EPSILON = 1e-4
 
-#######################   helper functions   ###########################
 
+###########################   NUMBA JIT FUNCTIONS   ###############################
 
-def organize_scene(objects):
-    obj_lst = []
-    lights = []
-    materials = []
-
-    for obj in objects:
-        if isinstance(obj, (Sphere, InfinitePlane, Cube)):
-            obj_lst.append(obj)
-        elif isinstance(obj, Light):
-            lights.append(obj)
-        elif isinstance(obj, Material):
-            materials.append(obj)
-
-    return obj_lst, lights, materials
-
-
-
-###########################   GEOMETRY   ###############################
-
-def intersect_sphere(ray_origin, ray_direction, sphere):
-    ## ray origin = P0
-    ## ray direction = V (normalized)
-
-    ## the geometric method for ray-sphere intersection
-
+@njit(cache=True)
+def _intersect_sphere_jit(ray_origin, ray_direction, sphere_pos, sphere_radius):
+    """JIT-compiled sphere intersection. Returns (t, hit_x, hit_y, hit_z, nx, ny, nz) or (-1, 0,0,0,0,0,0) if no hit."""
     # L = O - P0
-    L = sphere.position - ray_origin
+    L = sphere_pos - ray_origin
 
     # t_ca = L . V
     t_ca = np.dot(L, ray_direction)
 
     # d^2 = L . L - t_ca^2
-    d_squared = np.dot(L, L) - t_ca**2
-    r_squared = sphere.radius ** 2
+    d_squared = np.dot(L, L) - t_ca * t_ca
+    r_squared = sphere_radius * sphere_radius
 
     if d_squared > r_squared:
-        return None # ray misses the sphere
+        return -1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
 
     # intersections distances along the ray
     t_hc = np.sqrt(r_squared - d_squared)
     t1 = t_ca - t_hc
     t2 = t_ca + t_hc
 
-    t = None
+    t = -1.0
     if t1 > EPSILON and t2 > EPSILON:
-        t = min(t1, t2) # returns closest intersection
+        t = min(t1, t2)
     elif t1 > EPSILON:
-        t = t1 # returns the intersection in front of the ray
+        t = t1
     elif t2 > EPSILON:
-        t = t2 # returns the intersection in front of the ray
+        t = t2
     else:
+        return -1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
+
+    # intersection point
+    hit_x = ray_origin[0] + t * ray_direction[0]
+    hit_y = ray_origin[1] + t * ray_direction[1]
+    hit_z = ray_origin[2] + t * ray_direction[2]
+
+    # normal
+    nx = hit_x - sphere_pos[0]
+    ny = hit_y - sphere_pos[1]
+    nz = hit_z - sphere_pos[2]
+    n_len = np.sqrt(nx*nx + ny*ny + nz*nz)
+    nx /= n_len
+    ny /= n_len
+    nz /= n_len
+
+    return t, hit_x, hit_y, hit_z, nx, ny, nz
+
+
+@njit(cache=True)
+def _intersect_plane_jit(ray_origin, ray_direction, plane_normal, plane_offset):
+    """JIT-compiled plane intersection. Returns (t, hit_x, hit_y, hit_z, nx, ny, nz) or (-1, ...) if no hit."""
+    # Normalize plane normal
+    n_len = np.sqrt(plane_normal[0]**2 + plane_normal[1]**2 + plane_normal[2]**2)
+    nx = plane_normal[0] / n_len
+    ny = plane_normal[1] / n_len
+    nz = plane_normal[2] / n_len
+
+    V_dot_N = ray_direction[0]*nx + ray_direction[1]*ny + ray_direction[2]*nz
+    if abs(V_dot_N) < EPSILON:
+        return -1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
+
+    P0_dot_N = ray_origin[0]*nx + ray_origin[1]*ny + ray_origin[2]*nz
+    t = (plane_offset - P0_dot_N) / V_dot_N
+
+    if t < EPSILON:
+        return -1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
+
+    hit_x = ray_origin[0] + t * ray_direction[0]
+    hit_y = ray_origin[1] + t * ray_direction[1]
+    hit_z = ray_origin[2] + t * ray_direction[2]
+
+    # Ensure normal points against ray
+    if V_dot_N > 0:
+        nx, ny, nz = -nx, -ny, -nz
+
+    return t, hit_x, hit_y, hit_z, nx, ny, nz
+
+
+@njit(cache=True)
+def _intersect_cube_jit(ray_origin, ray_direction, cube_pos, cube_scale):
+    """JIT-compiled cube intersection."""
+    half = cube_scale / 2.0
+    min_x, min_y, min_z = cube_pos[0] - half, cube_pos[1] - half, cube_pos[2] - half
+    max_x, max_y, max_z = cube_pos[0] + half, cube_pos[1] + half, cube_pos[2] + half
+
+    t_near = -1e30
+    t_far = 1e30
+    hit_nx, hit_ny, hit_nz = 0.0, 0.0, 0.0
+
+    # X axis
+    if abs(ray_direction[0]) < EPSILON:
+        if ray_origin[0] < min_x or ray_origin[0] > max_x:
+            return -1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
+    else:
+        t1 = (min_x - ray_origin[0]) / ray_direction[0]
+        t2 = (max_x - ray_origin[0]) / ray_direction[0]
+        if t1 > t2:
+            t1, t2 = t2, t1
+        if t1 > t_near:
+            t_near = t1
+            hit_nx, hit_ny, hit_nz = -1.0 if ray_direction[0] > 0 else 1.0, 0.0, 0.0
+        if t2 < t_far:
+            t_far = t2
+        if t_near > t_far:
+            return -1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
+
+    # Y axis
+    if abs(ray_direction[1]) < EPSILON:
+        if ray_origin[1] < min_y or ray_origin[1] > max_y:
+            return -1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
+    else:
+        t1 = (min_y - ray_origin[1]) / ray_direction[1]
+        t2 = (max_y - ray_origin[1]) / ray_direction[1]
+        if t1 > t2:
+            t1, t2 = t2, t1
+        if t1 > t_near:
+            t_near = t1
+            hit_nx, hit_ny, hit_nz = 0.0, -1.0 if ray_direction[1] > 0 else 1.0, 0.0
+        if t2 < t_far:
+            t_far = t2
+        if t_near > t_far:
+            return -1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
+
+    # Z axis
+    if abs(ray_direction[2]) < EPSILON:
+        if ray_origin[2] < min_z or ray_origin[2] > max_z:
+            return -1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
+    else:
+        t1 = (min_z - ray_origin[2]) / ray_direction[2]
+        t2 = (max_z - ray_origin[2]) / ray_direction[2]
+        if t1 > t2:
+            t1, t2 = t2, t1
+        if t1 > t_near:
+            t_near = t1
+            hit_nx, hit_ny, hit_nz = 0.0, 0.0, -1.0 if ray_direction[2] > 0 else 1.0
+        if t2 < t_far:
+            t_far = t2
+        if t_near > t_far:
+            return -1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
+
+    if t_far < EPSILON:
+        return -1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
+
+    t_hit = t_near if t_near > EPSILON else t_far
+    hit_x = ray_origin[0] + t_hit * ray_direction[0]
+    hit_y = ray_origin[1] + t_hit * ray_direction[1]
+    hit_z = ray_origin[2] + t_hit * ray_direction[2]
+
+    # Ensure normal points against ray
+    dot = hit_nx * ray_direction[0] + hit_ny * ray_direction[1] + hit_nz * ray_direction[2]
+    if dot > 0:
+        hit_nx, hit_ny, hit_nz = -hit_nx, -hit_ny, -hit_nz
+
+    return t_hit, hit_x, hit_y, hit_z, hit_nx, hit_ny, hit_nz
+
+
+@njit(cache=True)
+def _closest_intersection_jit(ray_origin, ray_direction,
+                               sphere_positions, sphere_radii, sphere_mat_indices,
+                               plane_normals, plane_offsets, plane_mat_indices,
+                               cube_positions, cube_scales, cube_mat_indices):
+    """JIT-compiled closest intersection across all objects.
+    Returns (t, hit_x, hit_y, hit_z, nx, ny, nz, mat_idx, obj_type) or (-1, ...) if no hit.
+    obj_type: 0=sphere, 1=plane, 2=cube
+    """
+    closest_t = 1e30
+    best_hx, best_hy, best_hz = 0.0, 0.0, 0.0
+    best_nx, best_ny, best_nz = 0.0, 0.0, 0.0
+    best_mat_idx = -1
+    best_obj_type = -1
+    best_obj_idx = -1
+
+    # Test spheres
+    num_spheres = sphere_positions.shape[0]
+    for i in range(num_spheres):
+        t, hx, hy, hz, nx, ny, nz = _intersect_sphere_jit(
+            ray_origin, ray_direction, sphere_positions[i], sphere_radii[i])
+        if t > 0 and t < closest_t:
+            closest_t = t
+            best_hx, best_hy, best_hz = hx, hy, hz
+            best_nx, best_ny, best_nz = nx, ny, nz
+            best_mat_idx = sphere_mat_indices[i]
+            best_obj_type = 0
+            best_obj_idx = i
+
+    # Test planes
+    num_planes = plane_normals.shape[0]
+    for i in range(num_planes):
+        t, hx, hy, hz, nx, ny, nz = _intersect_plane_jit(
+            ray_origin, ray_direction, plane_normals[i], plane_offsets[i])
+        if t > 0 and t < closest_t:
+            closest_t = t
+            best_hx, best_hy, best_hz = hx, hy, hz
+            best_nx, best_ny, best_nz = nx, ny, nz
+            best_mat_idx = plane_mat_indices[i]
+            best_obj_type = 1
+            best_obj_idx = i
+
+    # Test cubes
+    num_cubes = cube_positions.shape[0]
+    for i in range(num_cubes):
+        t, hx, hy, hz, nx, ny, nz = _intersect_cube_jit(
+            ray_origin, ray_direction, cube_positions[i], cube_scales[i])
+        if t > 0 and t < closest_t:
+            closest_t = t
+            best_hx, best_hy, best_hz = hx, hy, hz
+            best_nx, best_ny, best_nz = nx, ny, nz
+            best_mat_idx = cube_mat_indices[i]
+            best_obj_type = 2
+            best_obj_idx = i
+
+    if best_obj_type < 0:
+        return -1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, -1, -1, -1
+
+    return closest_t, best_hx, best_hy, best_hz, best_nx, best_ny, best_nz, best_mat_idx, best_obj_type, best_obj_idx
+
+
+# Global variables for multiprocessing workers (set by initializer)
+_worker_data = {}
+
+#######################   helper functions   ###########################
+
+
+def organize_scene(objects):
+    """Organize scene objects and pre-cache geometry as numpy arrays."""
+    obj_lst = []
+    lights = []
+    materials = []
+
+    # Separate lists for each object type
+    spheres = []
+    planes = []
+    cubes = []
+
+    for obj in objects:
+        if isinstance(obj, Sphere):
+            obj_lst.append(obj)
+            spheres.append(obj)
+        elif isinstance(obj, InfinitePlane):
+            obj_lst.append(obj)
+            planes.append(obj)
+        elif isinstance(obj, Cube):
+            obj_lst.append(obj)
+            cubes.append(obj)
+        elif isinstance(obj, Light):
+            lights.append(obj)
+        elif isinstance(obj, Material):
+            materials.append(obj)
+
+    # Pre-cache geometry as numpy arrays for JIT functions
+    if spheres:
+        sphere_positions = np.array([s.position for s in spheres], dtype=np.float64)
+        sphere_radii = np.array([s.radius for s in spheres], dtype=np.float64)
+        sphere_mat_indices = np.array([s.material_index for s in spheres], dtype=np.int32)
+    else:
+        sphere_positions = np.empty((0, 3), dtype=np.float64)
+        sphere_radii = np.empty(0, dtype=np.float64)
+        sphere_mat_indices = np.empty(0, dtype=np.int32)
+
+    if planes:
+        plane_normals = np.array([p.normal for p in planes], dtype=np.float64)
+        plane_offsets = np.array([p.offset for p in planes], dtype=np.float64)
+        plane_mat_indices = np.array([p.material_index for p in planes], dtype=np.int32)
+    else:
+        plane_normals = np.empty((0, 3), dtype=np.float64)
+        plane_offsets = np.empty(0, dtype=np.float64)
+        plane_mat_indices = np.empty(0, dtype=np.int32)
+
+    if cubes:
+        cube_positions = np.array([c.position for c in cubes], dtype=np.float64)
+        cube_scales = np.array([c.scale for c in cubes], dtype=np.float64)
+        cube_mat_indices = np.array([c.material_index for c in cubes], dtype=np.int32)
+    else:
+        cube_positions = np.empty((0, 3), dtype=np.float64)
+        cube_scales = np.empty(0, dtype=np.float64)
+        cube_mat_indices = np.empty(0, dtype=np.int32)
+
+    # Store cached geometry
+    geometry_cache = {
+        'sphere_positions': sphere_positions,
+        'sphere_radii': sphere_radii,
+        'sphere_mat_indices': sphere_mat_indices,
+        'plane_normals': plane_normals,
+        'plane_offsets': plane_offsets,
+        'plane_mat_indices': plane_mat_indices,
+        'cube_positions': cube_positions,
+        'cube_scales': cube_scales,
+        'cube_mat_indices': cube_mat_indices,
+    }
+
+    return obj_lst, lights, materials, geometry_cache
+
+
+
+###########################   GEOMETRY   ###############################
+
+def intersect_sphere(ray_origin, ray_direction, sphere):
+    """Wrapper that calls JIT-compiled sphere intersection."""
+    sphere_pos = np.asarray(sphere.position, dtype=np.float64)
+    result = _intersect_sphere_jit(ray_origin, ray_direction, sphere_pos, sphere.radius)
+    if result[0] < 0:
         return None
-
-    intersection = ray_origin + t * ray_direction
-
-    # N = (P - O) / ||P - O||
-    normal = intersection - sphere.position
-    normal = normal / np.linalg.norm(normal)
-
-    return t, intersection, normal
+    t, hx, hy, hz, nx, ny, nz = result
+    return t, np.array([hx, hy, hz]), np.array([nx, ny, nz])
 
 #------------------------------------------------------------
 
 def intersect_plane(ray_origin, ray_direction, plane):
-
-    # Normalizing the plane normal to ensure accurate calculations
-    N = np.array(plane.normal, dtype=float)
-    N = N / np.linalg.norm(N)   
-    c = plane.offset
-
-    V_dot_N = np.dot(ray_direction, N)
-    if abs(V_dot_N) < EPSILON: # "equal to zero" - ray is parallel to the plane
-        return None  # no intersection
-
-    # place the ray origin in the plane equation
-    # find t in the ray equation = t = (c - P0 . N) / (V . N)
-    t = (c - np.dot(ray_origin, N)) / V_dot_N
-    if t < EPSILON:
-        return None # plane is behind the ray
-
-    hit_point = ray_origin + t * ray_direction
-
-    # ensure the normal is against the ray direction
-    #the normal and the ray create an obtuse angle
-    if np.dot(ray_direction, N) > 0:
-        N = -N
-
-    return t, hit_point, N
+    """Wrapper that calls JIT-compiled plane intersection."""
+    plane_normal = np.asarray(plane.normal, dtype=np.float64)
+    result = _intersect_plane_jit(ray_origin, ray_direction, plane_normal, plane.offset)
+    if result[0] < 0:
+        return None
+    t, hx, hy, hz, nx, ny, nz = result
+    return t, np.array([hx, hy, hz]), np.array([nx, ny, nz])
 
 #-----------------------------------------------------------
 
 def intersect_cube(ray_origin, ray_direction, cube):
-
-    pos = np.array(cube.position, dtype=float)
-    # calculate the bounds of the cube
-    half = cube.scale / 2.0
-    # left lower back corner 
-    min_bound = pos - half
-    # right upper front corner
-    max_bound = pos + half
-
-    # ray-box intersection points
-    # t_near is the largest entering t value from all axis
-    # t_far is the smallest exiting t value from all axis
-    t_near = -np.inf
-    t_far = np.inf
-    hit_normal = None
-
-    for i in range(3):  # x, y, z
-        if abs(ray_direction[i]) < EPSILON: # Ray is not moving in this axis
-            # Check if the ray origin is inside the cube bounds on this axis
-            if ray_origin[i] < min_bound[i] or ray_origin[i] > max_bound[i]:
-                return None
-        else:
-            # find t for when the ray crosses the two planes on this axis
-            # solution for: ray_origin[i] + t * ray_direction[i] = min_bound[i]
-            t1_i = (min_bound[i] - ray_origin[i]) / ray_direction[i]
-            t2_i = (max_bound[i] - ray_origin[i]) / ray_direction[i]
-
-            # swap t1 and t2 if necessary
-            t_entering_i = min(t1_i, t2_i)
-            t_exiting_i = max(t1_i, t2_i)
-
-            if t_entering_i > t_near:
-                t_near = t_entering_i
-                # update hit normal, box is axis-aligned so normal is determined by entering axis to the box and the entering side
-                hit_normal = np.zeros(3)
-                hit_normal[i] = -1 if t1_i > t2_i else 1
-            t_far = min(t_far, t_exiting_i)
-
-            # if at this point the largest entering t is larger than the smallest exiting t, no intersection, the ray misses the box
-            if t_near > t_far:
-                return None
-
-    # box is behind the ray
-    if t_far < EPSILON:
+    """Wrapper that calls JIT-compiled cube intersection."""
+    cube_pos = np.asarray(cube.position, dtype=np.float64)
+    result = _intersect_cube_jit(ray_origin, ray_direction, cube_pos, cube.scale)
+    if result[0] < 0:
         return None
-
-    # box survived tests, intersection occurs at t_near
-    # ray can be inside the box, so we take the nearest positive t
-    t_hit = t_near if t_near > EPSILON else t_far
-    hit_point = ray_origin + t_hit * ray_direction
-
-    # ensure normal points against the ray
-    if np.dot(hit_normal, ray_direction) > 0:
-        hit_normal = -hit_normal
-
-    return t_hit, hit_point, hit_normal   
+    t, hx, hy, hz, nx, ny, nz = result
+    return t, np.array([hx, hy, hz]), np.array([nx, ny, nz])
 
 #-----------------------------------------------------------
 
-def closest_intersection(ray_origin, ray_direction, obj_lst):
-    closest_t = np.inf
-    closest_hit_details = None
+def closest_intersection(ray_origin, ray_direction, geometry_cache):
+    """Find closest intersection using JIT-compiled function with cached geometry."""
+    result = _closest_intersection_jit(
+        ray_origin, ray_direction,
+        geometry_cache['sphere_positions'], geometry_cache['sphere_radii'], geometry_cache['sphere_mat_indices'],
+        geometry_cache['plane_normals'], geometry_cache['plane_offsets'], geometry_cache['plane_mat_indices'],
+        geometry_cache['cube_positions'], geometry_cache['cube_scales'], geometry_cache['cube_mat_indices']
+    )
 
-    for obj in obj_lst:
-        result = None
+    if result[0] < 0:
+        return None
 
-        if isinstance(obj, Sphere):
-            result = intersect_sphere(ray_origin, ray_direction, obj)
-        
-        elif isinstance(obj, InfinitePlane):
-            result = intersect_plane(ray_origin, ray_direction, obj)
+    t, hx, hy, hz, nx, ny, nz, mat_idx, obj_type, obj_idx = result
+    hit_point = np.array([hx, hy, hz])
+    hit_normal = np.array([nx, ny, nz])
 
-        elif isinstance(obj, Cube):
-            result = intersect_cube(ray_origin, ray_direction, obj)
-
-        # if there was an intersection - check if closest
-        if result is not None:
-            # unpack result
-            t, hit_point, hit_normal = result
-            if t < closest_t:
-                closest_t = t
-                closest_hit_details = (t, hit_point, hit_normal, obj)
-
-    return closest_hit_details
+    return t, hit_point, hit_normal, int(mat_idx)
 
 ###########################   SHADOWING   ###############################
 
@@ -224,8 +396,10 @@ def build_light_plane(light_direction):
 #-----------------------------------------------------------
 
 
-def soft_shadow(point_on_obj, light_src, obj_lst, shadow_rays_num):
+def soft_shadow(point_on_obj, light_src, geometry_cache, shadow_rays_num):
     # shadow_rays is given by scene settings
+    shadow_rays_num = int(shadow_rays_num)
+    total_shadow_rays = shadow_rays_num * shadow_rays_num
 
     light_vec = light_src.position - point_on_obj
     light_length = np.linalg.norm(light_vec)
@@ -233,41 +407,48 @@ def soft_shadow(point_on_obj, light_src, obj_lst, shadow_rays_num):
 
     u, v = build_light_plane(light_dir_norm)
 
+    # Vectorized generation of all shadow ray sample points
+    # Create grid indices
+    i_vals = np.arange(shadow_rays_num)
+    j_vals = np.arange(shadow_rays_num)
+    ii, jj = np.meshgrid(i_vals, j_vals, indexing='ij')
+    ii = ii.flatten()
+    jj = jj.flatten()
+
+    # Generate all random offsets at once
+    rand_i = np.random.rand(total_shadow_rays)
+    rand_j = np.random.rand(total_shadow_rays)
+
+    # Compute ru, rv for all rays
+    ru = (ii + rand_i) / shadow_rays_num - 0.5
+    rv = (jj + rand_j) / shadow_rays_num - 0.5
+
+    # Compute all offset vectors: (ru * u + rv * v) * radius
+    # u and v are (3,), ru and rv are (N,)
+    offset_vectors = np.outer(ru, u) + np.outer(rv, v)  # (N, 3)
+    offset_vectors *= light_src.radius
+
+    # All light sample positions
+    light_positions = light_src.position + offset_vectors  # (N, 3)
+
+    # All shadow rays from point to light samples
+    shadow_rays = light_positions - point_on_obj  # (N, 3)
+    distances = np.linalg.norm(shadow_rays, axis=1)  # (N,)
+    shadow_ray_dirs = shadow_rays / distances[:, np.newaxis]  # (N, 3)
+
+    # Shadow ray origins (offset by epsilon)
+    shadow_origins = point_on_obj + EPSILON * shadow_ray_dirs  # (N, 3)
+
+    # Now test each ray (intersection tests are hard to vectorize due to early-exit)
     rays_reaching_light = 0
-
-    shadow_rays_num = int(shadow_rays_num)
-    total_shadow_rays = shadow_rays_num * shadow_rays_num
-
-    # itarate over a grid of shadow_rays x shadow_rays
-    for i in range(shadow_rays_num):
-        for j in range(shadow_rays_num):
-
-           
-            # choose random point inside sub-square
-            # translating the grid to be 1*1 square centered at light position
-            # np.random.rand() E [0, 1)
-            ru = (i + np.random.rand()) / shadow_rays_num - 0.5
-            rv = (j + np.random.rand()) / shadow_rays_num - 0.5
-
-            # now (ru, rv) is a random point in the light square of size 1*1 centered at light position
-            # build the vector in the light plane the points from the center of the light to the random point inside the sub-square of the grid
-            offset_vector = (ru * u + rv * v) * light_src.radius # vector = direction * length
-            new_light_src_position = light_src.position + offset_vector
-
-            new_shadow_ray = new_light_src_position - point_on_obj
-            dist = np.linalg.norm(new_shadow_ray)
-            new_shadow_ray_norm = new_shadow_ray / dist
-
-            # offset the shadow ray origin to avoid self-intersection
-            shadow_origin = point_on_obj + EPSILON * new_shadow_ray_norm # epsilon for numerical errors
-            hit = closest_intersection(shadow_origin, new_shadow_ray_norm, obj_lst)
-
-            if hit is None: # no intersection - ray reached the light
+    for k in range(total_shadow_rays):
+        hit = closest_intersection(shadow_origins[k], shadow_ray_dirs[k], geometry_cache)
+        if hit is None:
+            rays_reaching_light += 1
+        else:
+            t, hit_point, hit_normal, mat_idx = hit
+            if t > distances[k]:
                 rays_reaching_light += 1
-            else:
-                t, hit_point, hit_normal, obj = hit
-                if t > dist: # intersection is beyond the light source
-                    rays_reaching_light += 1
 
     ratio = rays_reaching_light / total_shadow_rays
 
@@ -314,7 +495,7 @@ def compute_specular(Ks, Ip, shininess, normal, light_dir, view_dir):
 
 #-----------------------------------------------------------
 
-def compute_lighting(point_on_obj, normal, view_dir, material, lights, obj_lst, scene_settings):
+def compute_lighting(point_on_obj, normal, view_dir, material, lights, geometry_cache, scene_settings):
 
     # RGB color initialized to black
     color = np.zeros(3)
@@ -337,7 +518,7 @@ def compute_lighting(point_on_obj, normal, view_dir, material, lights, obj_lst, 
         diffuse = compute_diffuse(Kd, Ip, normal, light_dir_norm)
         specular = compute_specular(Ks, Ip, shininess, normal, light_dir_norm, view_dir)
         specular *= light.specular_intensity
-        soft_shadow_factor = soft_shadow(point_on_obj, light, obj_lst, scene_settings.root_number_shadow_rays)
+        soft_shadow_factor = soft_shadow(point_on_obj, light, geometry_cache, scene_settings.root_number_shadow_rays)
 
         color += soft_shadow_factor * (diffuse + specular)
 
@@ -354,31 +535,31 @@ def reflect(direction, normal):
 ###########################   RAY TRACER   ###############################
 
 def ray_tracer(camera, scene_settings, objects, image_width, image_height):
-    # split scene objects
-    obj_lst, lights, materials = organize_scene(objects)
+    # split scene objects and pre-cache geometry
+    obj_lst, lights, materials, geometry_cache = organize_scene(objects)
 
     # render image
-    image = render_scene(camera,scene_settings,obj_lst,lights,materials,image_width,image_height)
+    image = render_scene(camera, scene_settings, geometry_cache, lights, materials, image_width, image_height)
 
     return image
 
 #-----------------------------------------------------------
 
-def rec_ray_tracer(ray_origin, ray_direction, depth,scene_settings, obj_lst, lights, materials):
+def rec_ray_tracer(ray_origin, ray_direction, depth, scene_settings, geometry_cache, lights, materials):
 
     # stopping condition
     # from now on, rays contribute no light
     if depth <= 0:
         return np.array(scene_settings.background_color, dtype=float)
-    
-    hit = closest_intersection(ray_origin, ray_direction, obj_lst)
+
+    hit = closest_intersection(ray_origin, ray_direction, geometry_cache)
 
     # ray missed all objects, therefore return background color
     if hit is None:
         return np.array(scene_settings.background_color, dtype=float)
 
-    t, hit_point, normal, surface = hit
-    material = materials[surface.material_index-1]
+    t, hit_point, normal, mat_idx = hit
+    material = materials[mat_idx - 1]
 
     # specular depends on the view direction
     # calc view direction (towards camera)
@@ -387,7 +568,7 @@ def rec_ray_tracer(ray_origin, ray_direction, depth,scene_settings, obj_lst, lig
     view_dir_norm = view_dir / np.linalg.norm(view_dir)
 
     # calc lighting = diffuse + specular + soft shadow
-    color = compute_lighting(hit_point,normal,view_dir_norm, material,lights,obj_lst,scene_settings)
+    color = compute_lighting(hit_point, normal, view_dir_norm, material, lights, geometry_cache, scene_settings)
 
     # calc color returning from reflection
     # if the material has reflection color (one of the RGB is non zero)
@@ -401,7 +582,7 @@ def rec_ray_tracer(ray_origin, ray_direction, depth,scene_settings, obj_lst, lig
             reflect_dir_norm,
             depth - 1,
             scene_settings,
-            obj_lst,
+            geometry_cache,
             lights,
             materials
         )
@@ -420,7 +601,7 @@ def rec_ray_tracer(ray_origin, ray_direction, depth,scene_settings, obj_lst, lig
             ray_direction,
             depth - 1,
             scene_settings,
-            obj_lst,
+            geometry_cache,
             lights,
             materials
         )
@@ -436,12 +617,65 @@ def rec_ray_tracer(ray_origin, ray_direction, depth,scene_settings, obj_lst, lig
 
 ###########################   RENDER SCENE   ###############################
 
-def render_scene(camera, scene_settings,obj_lst, lights, materials,image_width, image_height):
+def _init_worker(cam_pos, screen_center, image_right_norm, image_up_norm,
+                 screen_width, screen_height, image_width, image_height,
+                 max_recursions, scene_settings, geometry_cache, lights, materials):
+    """Initialize worker process with shared data."""
+    _worker_data['cam_pos'] = cam_pos
+    _worker_data['screen_center'] = screen_center
+    _worker_data['image_right_norm'] = image_right_norm
+    _worker_data['image_up_norm'] = image_up_norm
+    _worker_data['screen_width'] = screen_width
+    _worker_data['screen_height'] = screen_height
+    _worker_data['image_width'] = image_width
+    _worker_data['image_height'] = image_height
+    _worker_data['max_recursions'] = max_recursions
+    _worker_data['scene_settings'] = scene_settings
+    _worker_data['geometry_cache'] = geometry_cache
+    _worker_data['lights'] = lights
+    _worker_data['materials'] = materials
+
+
+def _render_row(y):
+    """Render a single row of pixels. Called by worker processes."""
+    d = _worker_data
+    row = np.zeros((d['image_width'], 3))
+
+    for x in range(d['image_width']):
+        # normalized pixel coordinates in range [-0.5, 0.5]
+        px = (x + 0.5) / d['image_width'] - 0.5
+        py = (y + 0.5) / d['image_height'] - 0.5
+
+        # pixel position on the screen
+        pixel_pos = (
+            d['screen_center'] +
+            px * d['screen_width'] * d['image_right_norm'] +
+            py * d['screen_height'] * d['image_up_norm']
+        )
+
+        # build ray
+        ray_dir = pixel_pos - d['cam_pos']
+        ray_dir_norm = ray_dir / np.linalg.norm(ray_dir)
+
+        # trace ray
+        color = rec_ray_tracer(
+            d['cam_pos'],
+            ray_dir_norm,
+            d['max_recursions'],
+            d['scene_settings'],
+            d['geometry_cache'],
+            d['lights'],
+            d['materials']
+        )
+
+        row[x] = color * 255
+
+    return y, row
+
+
+def render_scene(camera, scene_settings, geometry_cache, lights, materials, image_width, image_height):
     # up - a vector from the center of the screen to the top of the screen
     # right - a vector from the center of the screen to the right of the screen
-
-    # image array with RGB values
-    image = np.zeros((image_height, image_width, 3))
 
     # camera parameters
     cam_pos = np.array(camera.position)
@@ -466,39 +700,33 @@ def render_scene(camera, scene_settings,obj_lst, lights, materials,image_width, 
 
     screen_center = cam_pos + forward_norm * screen_dist
 
-    # iterate over pixels
-    for y in range(image_height):
-        for x in range(image_width):
+    # Prepare data for workers
+    init_args = (
+        cam_pos, screen_center, image_right_norm, image_up_norm,
+        screen_width, screen_height, image_width, image_height,
+        scene_settings.max_recursions, scene_settings, geometry_cache, lights, materials
+    )
 
-            # normalized pixel coordinates in range [-0.5, 0.5]
-            px = (x + 0.5) / image_width - 0.5
-            py = (y + 0.5) / image_height - 0.5
+    # image array with RGB values
+    image = np.zeros((image_height, image_width, 3))
 
-            # pixel position on the screen
-            pixel_pos = (
-                screen_center +
-                px * screen_width * image_right_norm +
-                py * screen_height * image_up_norm
-            )
+    num_processes = cpu_count()
+    print(f"Rendering with {num_processes} processes...")
+    start_time = time.time()
 
-            # build ray
-            ray_dir = pixel_pos - cam_pos
-            ray_dir_norm = ray_dir / np.linalg.norm(ray_dir)
+    # Use multiprocessing pool to render rows in parallel
+    with Pool(processes=num_processes, initializer=_init_worker, initargs=init_args) as pool:
+        # Use imap_unordered for better progress tracking
+        completed = 0
+        for y, row in pool.imap_unordered(_render_row, range(image_height)):
+            image[y] = row
+            completed += 1
+            elapsed = time.time() - start_time
+            if completed > 0:
+                eta = elapsed / completed * (image_height - completed)
+                print(f"Row {completed}/{image_height} | Elapsed: {elapsed:.1f}s | ETA: {eta:.1f}s    ", end='\r')
 
-            # trace ray
-            color = rec_ray_tracer(
-                cam_pos,
-                ray_dir_norm,
-                scene_settings.max_recursions,
-                scene_settings,
-                obj_lst,
-                lights,
-                materials
-            )
-
-            # store color (convert to [0,255])
-            image[y, x] = color * 255
-
+    print()  # newline after progress
     return image
 
 
@@ -558,6 +786,8 @@ def main():
     # Parse the scene file
     camera, scene_settings, objects = parse_scene_file(args.scene_file)
 
+    time_start = time.time()
+
     image_array = ray_tracer(
         camera,
         scene_settings,
@@ -565,6 +795,9 @@ def main():
         args.width,
         args.height
     )
+
+    time_end = time.time()
+    print(f"Rendering time: {time_end - time_start:.2f} seconds")
 
     # Save the output image
     save_image(image_array, args.output_image)
